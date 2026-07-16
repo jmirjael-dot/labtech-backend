@@ -1,0 +1,251 @@
+// =========================================================
+// LABTECH MINERO — PRISMA SCHEMA
+// PostgreSQL · Diseño normalizado para laboratorio mineralógico
+// =========================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------
+
+enum Role {
+  CLIENTE
+  OPERADOR   // recepción / front desk del laboratorio
+  LABORATORISTA
+  ADMIN
+}
+
+/// Estado de la muestra a lo largo de todo el ciclo de vida.
+/// El orden del enum representa el flujo secuencial esperado.
+enum SampleStatus {
+  PENDIENTE_PAGO
+  PAGADO
+  EN_COLA
+  EN_LABORATORIO
+  EN_ANALISIS
+  CONTROL_CALIDAD
+  TERMINADO
+  ENTREGADO
+}
+
+enum MineralType {
+  OXIDO
+  SULFURO
+}
+
+enum MineralTarget {
+  ORO
+  PLATA
+  COBRE
+  PLOMO
+  ZINC
+  CARBON
+  ANTIMONIO
+}
+
+enum PaymentMethod {
+  CULQI          // tarjeta vía Culqi
+  YAPE_BUSINESS
+  TRANSFERENCIA_BCP
+}
+
+enum PaymentStatus {
+  PENDIENTE
+  EN_REVISION     // comprobante subido, pendiente de validación manual/automática
+  APROBADO
+  RECHAZADO
+  REEMBOLSADO
+}
+
+enum InvoiceType {
+  BOLETA
+  FACTURA
+}
+
+enum InvoiceStatus {
+  EMITIDA
+  ANULADA
+}
+
+// ---------------------------------------------------------
+// USUARIOS (clientes y staff del laboratorio)
+// ---------------------------------------------------------
+
+model User {
+  id             String   @id @default(uuid())
+  nombre         String
+  email          String   @unique
+  telefono       String
+  documento      String   @unique // RUC o DNI
+  passwordHash   String   @map("password_hash")
+  role           Role     @default(CLIENTE)
+  activo         Boolean  @default(true)
+
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  samples        Sample[]        @relation("ClienteSamples")
+  refreshTokens  RefreshToken[]
+  invoices       Invoice[]
+
+  @@index([email])
+  @@index([documento])
+  @@map("users")
+}
+
+/// Refresh tokens con rotación: cada uno se invalida al usarse
+/// y se reemplaza por uno nuevo (detección de reuso = revocar toda la familia).
+model RefreshToken {
+  id          String    @id @default(uuid())
+  token       String    @unique
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  revoked     Boolean   @default(false)
+  replacedBy  String?   @map("replaced_by")
+
+  expiresAt   DateTime  @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  createdByIp String?   @map("created_by_ip")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------
+// MUESTRAS
+// ---------------------------------------------------------
+
+model Sample {
+  id             String        @id @default(uuid())
+  codigo         String        @unique // ej. LTM-2026-000123, generado por el servicio
+
+  clienteId      String        @map("cliente_id")
+  cliente        User          @relation("ClienteSamples", fields: [clienteId], references: [id])
+
+  tipoMineral    MineralType   @map("tipo_mineral")
+  mineral        MineralTarget
+  descripcion    String
+  observaciones  String?
+
+  precio         Decimal       @db.Decimal(10, 2)
+  estado         SampleStatus  @default(PENDIENTE_PAGO)
+
+  payment        Payment?
+  result         Result?
+  invoice        Invoice?
+  statusHistory  SampleStatusHistory[]
+
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  @@index([clienteId])
+  @@index([estado])
+  @@map("samples")
+}
+
+/// Auditoría de cada cambio de estado — clave para trazabilidad
+/// en un laboratorio (quién movió la muestra, cuándo y desde dónde).
+model SampleStatusHistory {
+  id          String        @id @default(uuid())
+  sampleId    String        @map("sample_id")
+  sample      Sample        @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  estadoPrevio  SampleStatus? @map("estado_previo")
+  estadoNuevo   SampleStatus  @map("estado_nuevo")
+  cambiadoPor   String?       @map("cambiado_por") // userId del staff, null si fue automático
+  nota          String?
+
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([sampleId])
+  @@map("sample_status_history")
+}
+
+// ---------------------------------------------------------
+// PAGOS
+// ---------------------------------------------------------
+
+model Payment {
+  id               String        @id @default(uuid())
+  sampleId         String        @unique @map("sample_id")
+  sample           Sample        @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  monto            Decimal       @db.Decimal(10, 2)
+  metodo           PaymentMethod
+  estado           PaymentStatus @default(PENDIENTE)
+
+  // referencia del proveedor externo (id de cargo Culqi, operación Yape, etc.)
+  proveedorRef     String?       @map("proveedor_ref")
+  comprobanteUrl   String?       @map("comprobante_url")
+
+  metadata         Json?         // payload crudo de la pasarela, para auditoría
+
+  pagadoAt         DateTime?     @map("pagado_at")
+  validadoPorId    String?       @map("validado_por_id") // staff que aprobó pago manual (Yape/transferencia)
+
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  @@index([estado])
+  @@map("payments")
+}
+
+// ---------------------------------------------------------
+// RESULTADOS
+// ---------------------------------------------------------
+
+model Result {
+  id             String   @id @default(uuid())
+  sampleId       String   @unique @map("sample_id")
+  sample         Sample   @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  ley            String   // ej. "4.85 g/t" o "1.32 %"
+  metodo         String   // ej. "Fire Assay + AAS"
+  laboratorista  String
+  observaciones  String?
+
+  reportePdfUrl  String?  @map("reporte_pdf_url")
+
+  emitidoAt      DateTime @default(now()) @map("emitido_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("results")
+}
+
+// ---------------------------------------------------------
+// BOLETAS / FACTURAS
+// ---------------------------------------------------------
+
+model Invoice {
+  id           String        @id @default(uuid())
+  numero       String        @unique // ej. B001-000123
+  tipo         InvoiceType   @default(BOLETA)
+  estado       InvoiceStatus @default(EMITIDA)
+
+  sampleId     String        @unique @map("sample_id")
+  sample       Sample        @relation(fields: [sampleId], references: [id])
+
+  clienteId    String        @map("cliente_id")
+  cliente      User          @relation(fields: [clienteId], references: [id])
+
+  subtotal     Decimal       @db.Decimal(10, 2)
+  igv          Decimal       @db.Decimal(10, 2)
+  total        Decimal       @db.Decimal(10, 2)
+
+  pdfUrl       String?       @map("pdf_url")
+
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  @@index([clienteId])
+  @@map("invoices")
+}

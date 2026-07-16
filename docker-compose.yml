@@ -1,0 +1,18 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: labtech-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: labtech_user
+      POSTGRES_PASSWORD: labtech_pass
+      POSTGRES_DB: labtech_minero
+    ports:
+      - '5432:5432'
+    volumes:
+      - labtech_pg_data:/var/lib/postgresql/data
+
+volumes:
+  labtech_pg_data:
