@@ -32,6 +32,8 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  logger.error('❌ Error fatal al iniciar el servidor', { err });
+  console.error('❌ Error fatal al iniciar el servidor');
+  console.error('Mensaje:', err instanceof Error ? err.message : err);
+  console.error('Detalle completo:', err);
   process.exit(1);
 });
