@@ -69,4 +69,22 @@ router.patch(
   ResultController.marcarEntregado
 );
 
+/**
+ * @openapi
+ * /api/v1/results/{sampleId}/enviar-email:
+ *   post:
+ *     tags: [Results]
+ *     summary: Envía el PDF del informe al correo del cliente (solo staff)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Correo enviado }
+ *       409: { description: No hay PDF generado, o el envío de correos no está configurado }
+ */
+router.post(
+  '/:sampleId/enviar-email',
+  requireRole(...STAFF_ROLES),
+  validate({ params: sampleIdParamSchema }),
+  ResultController.enviarEmail
+);
+
 export default router;

@@ -25,4 +25,11 @@ export const ResultController = {
     const sample = await ResultService.marcarEntregado(req.params.sampleId, req.user.sub);
     res.status(200).json({ ok: true, data: sample });
   }),
+
+  /** Envía el PDF del informe por correo al cliente (solo staff). */
+  enviarEmail: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw AppError.unauthorized();
+    const result = await ResultService.enviarPorEmail(req.params.sampleId);
+    res.status(200).json({ ok: true, data: result, message: `Correo enviado a ${result.enviadoA}` });
+  }),
 };

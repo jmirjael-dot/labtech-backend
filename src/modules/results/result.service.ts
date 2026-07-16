@@ -4,6 +4,7 @@ import { AppError } from '../../shared/errors/AppError';
 import { emitToDashboard, emitToCliente } from '../../config/socket';
 import { transicionarEstado } from '../samples/sample.state-machine';
 import { ReportService } from '../reports/report.service';
+import { EmailService } from '../notifications/email.service';
 import type { CreateResultInput } from './result.schema';
 
 export const ResultService = {
@@ -76,5 +77,26 @@ export const ResultService = {
     emitToDashboard('sample:status-updated', updated);
     emitToCliente(updated.clienteId, 'sample:status-updated', updated);
     return updated;
+  },
+
+  /** Envía el PDF del informe al correo del cliente (solo staff). */
+  async enviarPorEmail(sampleId: string) {
+    const result = await prisma.result.findUnique({
+      where: { sampleId },
+      include: { sample: { include: { cliente: true } } },
+    });
+    if (!result) throw AppError.notFound('Resultado no disponible aún para esta muestra');
+    if (!result.reportePdfUrl) throw AppError.conflict('Esta muestra todavía no tiene un PDF generado');
+
+    await EmailService.enviarReporte({
+      to: result.sample.cliente.email,
+      clienteNombre: result.sample.cliente.nombre,
+      muestraCodigo: result.sample.codigo,
+      mineral: result.sample.mineral,
+      ley: result.ley,
+      reportePdfUrl: result.reportePdfUrl,
+    });
+
+    return { enviadoA: result.sample.cliente.email };
   },
 };
