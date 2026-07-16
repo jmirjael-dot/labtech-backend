@@ -92,4 +92,18 @@ router.patch(
   SampleController.updateStatus
 );
 
+/**
+ * @openapi
+ * /api/v1/samples/{id}:
+ *   delete:
+ *     tags: [Samples]
+ *     summary: Elimina una muestra que aún no ha sido pagada (cliente dueño o staff)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Muestra eliminada }
+ *       403: { description: No tienes acceso a esta muestra }
+ *       409: { description: La muestra ya tiene un pago registrado, no se puede eliminar }
+ */
+router.delete('/:id', validate({ params: idParamSchema }), SampleController.remove);
+
 export default router;

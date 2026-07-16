@@ -15,6 +15,28 @@ async function generarCodigo(): Promise<string> {
   return `LTM-${year}-${correlativo}`;
 }
 
+// 🎬 MODO DEMO: flujo completo de estados, en orden, usado solo por
+// autoProgresarDemo() para saber cuál es "el siguiente paso" de cada muestra.
+const FLUJO_DEMO: SampleStatus[] = [
+  SampleStatus.PAGADO,
+  SampleStatus.EN_COLA,
+  SampleStatus.EN_LABORATORIO,
+  SampleStatus.EN_ANALISIS,
+  SampleStatus.CONTROL_CALIDAD,
+  SampleStatus.TERMINADO,
+  SampleStatus.ENTREGADO,
+];
+
+const LEY_DEMO: Record<string, () => string> = {
+  ORO: () => (Math.random() * 8 + 1).toFixed(2) + ' g/t',
+  PLATA: () => (Math.random() * 120 + 10).toFixed(1) + ' g/t',
+  COBRE: () => (Math.random() * 3 + 0.2).toFixed(2) + ' %',
+  PLOMO: () => (Math.random() * 2 + 0.1).toFixed(2) + ' %',
+  ZINC: () => (Math.random() * 4 + 0.2).toFixed(2) + ' %',
+  CARBON: () => (Math.random() * 20 + 60).toFixed(1) + ' % C fijo',
+  ANTIMONIO: () => (Math.random() * 1.5 + 0.1).toFixed(2) + ' %',
+};
+
 export const SampleService = {
   async create(clienteId: string, input: CreateSampleInput) {
     const precio = calcularPrecioMuestra(input.tipoMineral);
@@ -107,5 +129,76 @@ export const SampleService = {
     emitToCliente(updated.clienteId, 'sample:status-updated', updated);
 
     return updated;
+  },
+
+  /**
+   * Elimina una muestra. Solo se permite mientras sigue PENDIENTE_PAGO —
+   * una vez que hay un pago real (aunque sea "en revisión"), ya no se
+   * puede borrar, para no perder trazabilidad de facturación.
+   */
+  async remove(id: string, requesterId: string, requesterIsStaff: boolean) {
+    const sample = await prisma.sample.findUnique({ where: { id }, include: { payment: true } });
+    if (!sample) throw AppError.notFound('Muestra no encontrada');
+
+    if (!requesterIsStaff && sample.clienteId !== requesterId) {
+      throw AppError.forbidden('No tienes acceso a esta muestra');
+    }
+
+    if (sample.estado !== SampleStatus.PENDIENTE_PAGO || sample.payment) {
+      throw AppError.conflict('Solo se pueden eliminar muestras que aún no han sido pagadas ni tienen un comprobante subido');
+    }
+
+    await prisma.sample.delete({ where: { id } });
+
+    emitToDashboard('sample:deleted', { id });
+    emitToCliente(sample.clienteId, 'sample:deleted', { id });
+
+    return true;
+  },
+
+  /**
+   * 🎬 MODO DEMO — avanza automáticamente las muestras que ya están pagadas,
+   * simulando el trabajo del laboratorio sin necesitar que un staff mueva
+   * cada una a mano. Se llama periódicamente desde server.ts.
+   */
+  async autoProgresarDemo() {
+    const samples = await prisma.sample.findMany({
+      where: { estado: { in: FLUJO_DEMO.slice(0, -1) } },
+    });
+
+    for (const sample of samples) {
+      if (Math.random() >= 0.4) continue;
+
+      const idx = FLUJO_DEMO.indexOf(sample.estado);
+      if (idx === -1 || idx >= FLUJO_DEMO.length - 1) continue;
+      const siguiente = FLUJO_DEMO[idx + 1];
+
+      const updated = await transicionarEstado({
+        sampleId: sample.id,
+        estadoNuevo: siguiente,
+        nota: 'Avance automático (modo demo)',
+      });
+
+      if (siguiente === SampleStatus.TERMINADO) {
+        const yaExiste = await prisma.result.findUnique({ where: { sampleId: sample.id } });
+        if (!yaExiste) {
+          const generador = LEY_DEMO[sample.mineral] || (() => (Math.random() * 10).toFixed(2));
+          await prisma.result.create({
+            data: {
+              sampleId: sample.id,
+              ley: generador(),
+              metodo: sample.tipoMineral === 'SULFURO' ? 'Fire Assay + AAS' : 'Digestión ácida + AAS',
+              laboratorista: 'Lab. LabTech Minero - Trujillo',
+            },
+          });
+        }
+      }
+
+      emitToDashboard('sample:status-updated', updated);
+      emitToCliente(updated.clienteId, 'sample:status-updated', updated);
+      if (siguiente === SampleStatus.ENTREGADO) {
+        emitToCliente(updated.clienteId, 'result:ready', updated);
+      }
+    }
   },
 };

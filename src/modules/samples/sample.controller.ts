@@ -42,4 +42,15 @@ export const SampleController = {
     );
     res.status(200).json({ ok: true, data: updated });
   }),
+
+  /**
+   * Elimina una muestra — cliente dueño o staff. Solo permitido mientras
+   * sigue PENDIENTE_PAGO (nunca se borra algo que ya tiene un pago real
+   * registrado, para no perder trazabilidad de facturación).
+   */
+  remove: asyncHandler(async (req: Request, res: Response) => {
+    if (!req.user) throw AppError.unauthorized();
+    await SampleService.remove(req.params.id, req.user.sub, isStaff(req.user.role));
+    res.status(200).json({ ok: true, message: 'Muestra eliminada' });
+  }),
 };

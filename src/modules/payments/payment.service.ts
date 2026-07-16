@@ -73,7 +73,14 @@ export const PaymentService = {
     return { payment, gateway: input.metodo.toLowerCase() as 'yape_business' | 'transferencia_bcp', gatewayInfo };
   },
 
-  /** Cliente sube la captura del pago (Yape/transferencia) → pasa a EN_REVISION. */
+  /**
+   * Cliente sube la captura del pago (Yape/transferencia) → pasa a EN_REVISION.
+   *
+   * 🎬 MODO DEMO: ya no se aprueba instantáneo — queda "Validando Pago" un
+   * rato (lo aprueba solo `autoAprobarPendientesDemo`, llamado cada 20s
+   * desde server.ts), para que el cliente vea un estado intermedio real en
+   * vez de que todo salte directo a "Pagado".
+   */
   async uploadComprobante(sampleId: string, clienteId: string, file: Express.Multer.File) {
     const payment = await prisma.payment.findUnique({ where: { sampleId } });
     if (!payment) throw AppError.notFound('No existe un pago iniciado para esta muestra');
@@ -89,16 +96,12 @@ export const PaymentService = {
     });
 
     emitToDashboard('payment:comprobante-uploaded', updated);
+    emitToCliente(clienteId, 'payment:comprobante-uploaded', updated);
     return updated;
   },
 
   /** Staff aprueba o rechaza un pago en revisión (Yape/transferencia). */
-  async validate(
-    paymentId: string,
-    staffId: string,
-    estado: (typeof PaymentStatus)['APROBADO'] | (typeof PaymentStatus)['RECHAZADO'],
-    nota?: string
-  ) {
+  async validate(paymentId: string, staffId: string, estado: 'APROBADO' | 'RECHAZADO', nota?: string) {
     const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
     if (!payment) throw AppError.notFound('Pago no encontrado');
 
@@ -107,12 +110,12 @@ export const PaymentService = {
       data: {
         estado,
         validadoPorId: staffId,
-        pagadoAt: estado === PaymentStatus.APROBADO ? new Date() : payment.pagadoAt,
+        pagadoAt: estado === 'APROBADO' ? new Date() : payment.pagadoAt,
         metadata: nota ? { ...(payment.metadata as any), notaValidacion: nota } : payment.metadata,
       },
     });
 
-    if (estado === PaymentStatus.APROBADO) {
+    if (estado === 'APROBADO') {
       await this._aprobarYAvanzarMuestra(payment.sampleId);
     } else {
       emitToDashboard('payment:rejected', updated);
@@ -140,5 +143,27 @@ export const PaymentService = {
     emitToDashboard('payment:approved', sample);
     emitToCliente(sample.clienteId, 'payment:approved', sample);
     return sample;
+  },
+
+  /**
+   * 🎬 MODO DEMO — aprueba automáticamente los pagos que llevan un rato en
+   * EN_REVISION, simulando la validación de un staff sin que nadie tenga
+   * que hacer clic en "Aprobar" en el Billing. Se llama cada 20s desde
+   * server.ts. Bórralo cuando conectes validación manual real.
+   */
+  async autoAprobarPendientesDemo() {
+    const pendientes = await prisma.payment.findMany({ where: { estado: PaymentStatus.EN_REVISION } });
+
+    for (const payment of pendientes) {
+      // ~50% de probabilidad de aprobarse en cada tick (cada ~20-40s en promedio)
+      if (Math.random() >= 0.5) continue;
+
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { estado: PaymentStatus.APROBADO, pagadoAt: new Date() },
+      });
+
+      await this._aprobarYAvanzarMuestra(payment.sampleId);
+    }
   },
 };
