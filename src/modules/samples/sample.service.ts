@@ -8,11 +8,22 @@ import type { CreateSampleInput, ListSamplesQuery } from './sample.schema';
 
 async function generarCodigo(): Promise<string> {
   const year = new Date().getFullYear();
-  const count = await prisma.sample.count({
-    where: { createdAt: { gte: new Date(`${year}-01-01T00:00:00.000Z`) } },
+  const prefix = `LTM-${year}-`;
+
+  // Antes esto contaba cuántas muestras existían y le sumaba 1 — al borrar
+  // una muestra del medio, el conteo bajaba y el siguiente código podía
+  // chocar con uno que ya existía (violación de la restricción "único").
+  // Ahora se basa en el número correlativo MÁS ALTO ya usado este año, así
+  // que nunca retrocede aunque se hayan borrado muestras intermedias.
+  const ultima = await prisma.sample.findFirst({
+    where: { codigo: { startsWith: prefix } },
+    orderBy: { codigo: 'desc' },
+    select: { codigo: true },
   });
-  const correlativo = String(count + 1).padStart(6, '0');
-  return `LTM-${year}-${correlativo}`;
+
+  const ultimoNumero = ultima ? parseInt(ultima.codigo.slice(prefix.length), 10) || 0 : 0;
+  const correlativo = String(ultimoNumero + 1).padStart(6, '0');
+  return `${prefix}${correlativo}`;
 }
 
 // 🎬 MODO DEMO: flujo completo de estados, en orden, usado solo por
